@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hawaii Election Dashboard</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<script src="data.js"></script>
+<script>
+  document.addEventListener('alpine:init', () => {
+    Alpine.store('data', window.__DATA || {});
+  });
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<style>
+:root {
+  --bg: #0f0f0f;
+  --surface: #161616;
+  --surface-raised: #1a1a1a;
+  --surface-hover: #1f1f1f;
+  --border: #262626;
+  --border-strong: #333;
+  --text-primary: #f9fafb;
+  --text-secondary: #d1d5db;
+  --text-muted: #9ca3af;
+  --text-dim: #6b7280;
+  --accent: #3b82f6;
+  --accent-dim: #3b82f622;
+  --green: #10b981;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --purple: #8b5cf6;
+  --indigo: #6366f1;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; background: var(--bg); color: var(--text-secondary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13.5px; line-height: 1.6;
+  min-height: 100vh;
+}
+header {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 18px 24px; display: flex; align-items: center; gap: 24px;
+  position: sticky; top: 0; z-index: 100;
+}
+header h1 {
+  margin: 0; font-size: 20px; font-weight: 700; color: var(--text-primary);
+  display: flex; align-items: center; gap: 10px;
+}
+.tabs { display: flex; gap: 4px; margin-left: auto; }
+.tab {
+  background: transparent; border: 1px solid var(--border); color: var(--text-muted);
+  padding: 8px 16px; font-size: 12px; font-weight: 600; border-radius: 8px;
+  cursor: pointer; transition: all .15s;
+}
+.tab:hover { background: var(--surface-hover); color: var(--text-secondary); }
+.tab.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.tab-meta { color: var(--text-dim); font-size: 11px; margin-left: 8px; }
+
+.shell { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 64px); }
+@media (max-width: 1024px) { .shell { grid-template-columns: 1fr; } }
+
+aside {
+  background: var(--surface); border-right: 1px solid var(--border); padding: 20px;
+  overflow-y: auto; max-height: calc(100vh - 64px); position: sticky; top: 64px;
+}
+@media (max-width: 1024px) { aside { position: static; max-height: none; } }
+.side-section { margin-bottom: 22px; }
+.side-label {
+  display: block; font-size: 10px; font-weight: 800; color: var(--text-dim);
+  letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 8px;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  background: var(--surface-raised); border: 1px solid var(--border); color: var(--text-secondary);
+  padding: 5px 10px; font-size: 11.5px; border-radius: 6px; cursor: pointer;
+  transition: all .12s; user-select: none; font-weight: 500;
+}
+.chip:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+.chip.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.chip.muted { color: var(--text-dim); }
+.race-search {
+  width: 100%; background: var(--surface-raised); border: 1px solid var(--border);
+  color: var(--text-primary); padding: 7px 10px; font-size: 12px; border-radius: 6px;
+  margin-bottom: 8px; font-family: inherit;
+}
+.race-search:focus { outline: none; border-color: var(--accent); }
+.race-list {
+  max-height: 280px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-raised);
+}
+.race-row {
+  padding: 6px 10px; font-size: 12px; cursor: pointer; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; color: var(--text-secondary);
+}
+.race-row:last-child { border-bottom: none; }
+.race-row:hover { background: var(--surface-hover); }
+.race-row.selected { background: var(--accent-dim); color: var(--accent); }
+.race-row input[type=checkbox] { accent-color: var(--accent); margin: 0; }
+.toggle-row {
+  display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary);
+  cursor: pointer; padding: 5px 0;
+}
+.toggle-row input[type=checkbox] { accent-color: var(--accent); }
+.btn-row { display: flex; gap: 6px; margin-top: 6px; }
+.btn-mini {
+  background: transparent; border: 1px solid var(--border); color: var(--text-muted);
+  padding: 4px 8px; font-size: 10.5px; border-radius: 5px; cursor: pointer;
+  text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600;
+}
+.btn-mini:hover { background: var(--surface-hover); color: var(--text-secondary); }
+
+main { padding: 24px 28px; max-width: 1700px; }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+@media (max-width: 700px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+.metric-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 16px;
+}
+.metric-label { font-size: 10px; font-weight: 800; color: var(--text-dim); letter-spacing: 1.2px; text-transform: uppercase; }
+.metric-value { font-size: 22px; font-weight: 700; color: var(--text-primary); margin-top: 4px; }
+.status-bar {
+  background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 8px; padding: 10px 14px; font-size: 12px; color: var(--text-secondary);
+  margin-bottom: 18px;
+}
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+@media (max-width: 1280px) { .grid-2 { grid-template-columns: 1fr; } }
+.chart-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
+  min-height: 460px; display: flex; flex-direction: column;
+}
+.chart-head {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 10px;
+  flex-wrap: wrap;
+}
+.chart-title { font-size: 14px; font-weight: 700; color: var(--text-primary); margin: 0; }
+.chart-body { flex: 1; min-height: 400px; }
+.empty {
+  display: flex; align-items: center; justify-content: center; color: var(--text-dim);
+  font-size: 13px; height: 100%;
+}
+
+/* Table (chart 4) */
+.results-table-wrap { overflow: auto; max-height: 430px; border: 1px solid var(--border); border-radius: 8px; }
+table.results { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.results th, table.results td { padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.results thead th {
+  background: var(--surface-raised); color: var(--text-muted); font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.6px; font-size: 10.5px; position: sticky; top: 0; z-index: 1;
+}
+table.results td.row-label { color: var(--text-primary); font-weight: 600; }
+table.results td.total-col { background: var(--surface-raised); color: var(--text-primary); font-weight: 600; }
+table.results tr:hover td { background: var(--surface-hover); }
+table.results td { color: var(--text-secondary); }
+
+/* Rankings table */
+.rankings-grid { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+.rankings-filters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+@media (max-width: 900px) { .rankings-filters { grid-template-columns: 1fr 1fr; } }
+.rankings-filters label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 700; }
+.rankings-filters select {
+  background: var(--surface-raised); border: 1px solid var(--border); color: var(--text-primary);
+  padding: 8px 10px; font-size: 13px; border-radius: 6px; font-family: inherit;
+}
+.rankings-filters select:focus { outline: none; border-color: var(--accent); }
+.rank-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 16px; }
+@media (max-width: 700px) { .rank-stats { grid-template-columns: 1fr; } }
+
+/* Demographics */
+.demo-section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+.demo-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.demo-title { font-size: 15px; font-weight: 700; color: var(--text-primary); margin: 0; }
+
+/* Plotly hover override */
+.plotly .modebar { background: transparent !important; }
+.plotly .modebar-btn path { fill: var(--text-muted) !important; }
+
+.footer { text-align: center; color: var(--text-dim); font-size: 11px; padding: 30px 0 20px; }
+</style>
+</head>
+<body x-data="dashboard()" x-init="init()">
+
+<header>
+  <h1><span>🗳️</span> Hawaii Election Dashboard</h1>
+  <div class="tabs">
+    <button class="tab" :class="{ active: tab === 'dashboard' }" @click="tab = 'dashboard'; renderAll()">Dashboard</button>
+    <button class="tab" :class="{ active: tab === 'rankings' }" @click="tab = 'rankings'; renderRankings()">Turnout Rankings</button>
+  </div>
+</header>
+
+<div class="shell">
+
+<!-- ============== SIDEBAR ============== -->
+<aside x-show="tab === 'dashboard'">
+  <div class="side-section">
+    <span class="side-label">Year</span>
+    <div class="chips">
+      <template x-for="y in $store.data.years" :key="y">
+        <div class="chip" :class="{ active: filters.years.includes(y) }" @click="toggle('years', y); refresh()" x-text="y"></div>
+      </template>
+    </div>
+  </div>
+
+  <div class="side-section">
+    <span class="side-label">Election Type</span>
+    <div class="chips">
+      <template x-for="t in $store.data.types" :key="t">
+        <div class="chip" :class="{ active: filters.types.includes(t) }" @click="toggle('types', t); refresh()" x-text="t"></div>
+      </template>
+    </div>
+  </div>
+
+  <div class="side-section">
+    <span class="side-label">District</span>
+    <input class="race-search" placeholder="Filter districts..." x-model="districtSearch">
+    <div class="race-list">
+      <template x-for="d in filteredDistricts()" :key="d.label">
+        <div class="race-row" :class="{ selected: filters.districts.includes(d.label) }" @click="toggle('districts', d.label); refresh()">
+          <input type="checkbox" :checked="filters.districts.includes(d.label)" tabindex="-1" style="pointer-events: none;">
+          <span x-text="d.label"></span>
+        </div>
+      </template>
+    </div>
+    <div class="btn-row">
+      <button class="btn-mini" @click="filters.districts = []; refresh()">Clear</button>
+    </div>
+  </div>
+
+  <div class="side-section">
+    <span class="side-label">Race <span x-text="`(${availableRaces().length})`" style="color: var(--text-dim); font-weight: 600;"></span></span>
+    <input class="race-search" placeholder="Filter races..." x-model="raceSearch">
+    <div class="race-list">
+      <template x-for="r in filteredRaces()" :key="r">
+        <div class="race-row" :class="{ selected: filters.races.includes(r) }" @click="toggle('races', r); refresh()">
+          <input type="checkbox" :checked="filters.races.includes(r)" tabindex="-1" style="pointer-events: none;">
+          <span x-text="r"></span>
+        </div>
+      </template>
+    </div>
+    <div class="btn-row">
+      <button class="btn-mini" @click="filters.races = []; refresh()">Clear</button>
+      <button class="btn-mini" @click="filters.races = filteredRaces().slice(0, 50); refresh()">Select Visible</button>
+    </div>
+  </div>
+
+  <div class="side-section">
+    <span class="side-label">Chart View</span>
+    <div class="chips">
+      <div class="chip" :class="{ active: viewMode === 'cbp' }" @click="viewMode = 'cbp'; renderAll()">Candidates × Precinct</div>
+      <div class="chip" :class="{ active: viewMode === 'pbc' }" @click="viewMode = 'pbc'; renderAll()">Precincts × Candidate</div>
+    </div>
+  </div>
+
+  <div class="side-section">
+    <span class="side-label">Vote Type</span>
+    <label class="toggle-row">
+      <input type="checkbox" x-model="combineVotes" @change="renderAll()">
+      Combine Mail + In-Person
+    </label>
+  </div>
+</aside>
+
+<!-- placeholder so rankings tab gets full width -->
+<aside x-show="tab === 'rankings'" style="display: none;"></aside>
+
+<!-- ============== MAIN ============== -->
+<main>
+
+<!-- DASHBOARD TAB -->
+<div x-show="tab === 'dashboard'">
+  <div class="status-bar" x-show="filters.races.length === 0"
+       style="border-left-color: var(--amber); color: var(--text-muted);">
+    Select one or more races in the sidebar to see results.
+  </div>
+
+  <div x-show="filters.races.length > 0">
+    <!-- Metric cards -->
+    <div class="metrics">
+      <div class="metric-card">
+        <div class="metric-label">Total Votes</div>
+        <div class="metric-value" x-text="stats.totalVotes.toLocaleString()"></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Precincts</div>
+        <div class="metric-value" x-text="stats.precinctCount.toLocaleString()"></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Races Selected</div>
+        <div class="metric-value" x-text="filters.races.length"></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Candidates</div>
+        <div class="metric-value" x-text="stats.candidateCount"></div>
+      </div>
+    </div>
+
+    <div class="status-bar" x-text="statusMessage"></div>
+
+    <!-- Row 1: Bar + Pie -->
+    <div class="grid-2">
+      <div class="chart-card">
+        <div class="chart-head">
+          <h3 class="chart-title" x-text="chart1Title"></h3>
+          <label class="toggle-row" style="font-size: 11px;">
+            <input type="checkbox" x-model="chart1Pct" @change="renderChart1()">
+            Show as %
+          </label>
+        </div>
+        <div class="chart-body" id="chart1"></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-head">
+          <h3 class="chart-title">Vote Share</h3>
+        </div>
+        <div class="chart-body" id="chart2"></div>
+      </div>
+    </div>
+
+    <!-- Row 2: Turnout + Crosstab -->
+    <div class="grid-2">
+      <div class="chart-card">
+        <div class="chart-head">
+          <h3 class="chart-title">Turnout Statistics</h3>
+          <label class="toggle-row" style="font-size: 11px;">
+            <input type="checkbox" x-model="turnoutPct" @change="renderChart3()">
+            Show as %
+          </label>
+        </div>
+        <div class="chart-body" id="chart3"></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-head">
+          <h3 class="chart-title">Detailed Results</h3>
+        </div>
+        <div class="chart-body" style="overflow: auto;">
+          <div class="results-table-wrap" x-html="resultsTableHtml"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Demographics -->
+    <div id="demographics"></div>
+  </div>
+</div>
+
+<!-- RANKINGS TAB -->
+<div x-show="tab === 'rankings'">
+  <div class="rankings-grid">
+    <div class="rankings-filters">
+      <label>Year
+        <select @change="ranking.year = parseInt($event.target.value, 10); renderRankings()">
+          <template x-for="y in $store.data.years" :key="y">
+            <option :value="y" :selected="y === ranking.year" x-text="y"></option>
+          </template>
+        </select>
+      </label>
+      <label>Election Type
+        <select @change="ranking.type = $event.target.value; renderRankings()">
+          <template x-for="t in $store.data.types" :key="t">
+            <option :value="t" :selected="t === ranking.type" x-text="t"></option>
+          </template>
+        </select>
+      </label>
+      <label>View Level
+        <select x-model="ranking.view" @change="renderRankings()">
+          <option value="precinct">Precincts</option>
+          <option value="hd">House Districts (HD)</option>
+          <option value="sd">Senate Districts (SD)</option>
+          <option value="cd">Congressional Districts</option>
+          <option value="cc">County Council Districts</option>
+        </select>
+      </label>
+      <label>Display
+        <select x-model="ranking.display" @change="renderRankings()">
+          <option value="pct">Turnout % Only</option>
+          <option value="count">Total Turnout (Count)</option>
+          <option value="both">Both</option>
+        </select>
+      </label>
+    </div>
+
+    <h3 style="margin: 0 0 6px; color: var(--text-primary); font-size: 16px;" x-text="`${rankingViewLabel} - ${ranking.type} ${ranking.year}`"></h3>
+    <div style="color: var(--text-muted); font-size: 12px; margin-bottom: 14px;">
+      <span x-text="`Total: ${rankingRows.length.toLocaleString()}`"></span>
+    </div>
+
+    <div class="results-table-wrap" style="max-height: 600px;">
+      <table class="results">
+        <thead>
+          <tr>
+            <th style="width: 60px;">#</th>
+            <th>Name</th>
+            <th x-show="ranking.display !== 'pct'">Registered</th>
+            <th x-show="ranking.display !== 'pct'">Turnout</th>
+            <th x-show="ranking.display !== 'count'">Turnout %</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="(row, i) in rankingRows" :key="row.name">
+            <tr>
+              <td class="row-label" x-text="i + 1"></td>
+              <td class="row-label" x-text="row.name"></td>
+              <td x-show="ranking.display !== 'pct'" x-text="row.reg.toLocaleString()"></td>
+              <td x-show="ranking.display !== 'pct'" x-text="row.tn.toLocaleString()"></td>
+              <td x-show="ranking.display !== 'count'" x-text="row.tp.toFixed(1) + '%'"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="rank-stats" x-show="rankingRows.length > 0">
+      <div class="metric-card">
+        <div class="metric-label">Highest Turnout</div>
+        <div class="metric-value" style="color: var(--green);" x-text="(Math.max(...rankingRows.map(r => r.tp))).toFixed(1) + '%'"></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Average Turnout</div>
+        <div class="metric-value" x-text="(rankingRows.reduce((s,r) => s + r.tp, 0) / Math.max(1, rankingRows.length)).toFixed(1) + '%'"></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Lowest Turnout</div>
+        <div class="metric-value" style="color: var(--red);" x-text="(Math.min(...rankingRows.map(r => r.tp))).toFixed(1) + '%'"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  Hawaii Election Dashboard · Built for ʻĀina Votes ·
+  <span x-text="`generated ${($store.data.generated || '').slice(0, 10)}`"></span>
+</div>
+
+</main>
+</div>
+
+<script src="dashboard.js"></script>
+</body>
+</html>
