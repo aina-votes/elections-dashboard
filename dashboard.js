@@ -60,10 +60,10 @@ function dashboard() {
     stats: { totalVotes: 0, precinctCount: 0, candidateCount: 0 },
     statusMessage: '',
     resultsTableHtml: '',
-    mapShowOthers: true,
     mapStatus: '',
     _geojson: null,
     _geojsonPromise: null,
+    _precinctCentroids: null,
 
     init() {
       const data = window.__DATA;
@@ -280,90 +280,113 @@ function dashboard() {
       });
     },
 
+    _computeCentroids(geo) {
+      if (this._precinctCentroids) return this._precinctCentroids;
+      const polyCentroid = (ring) => {
+        let sx = 0, sy = 0, n = 0;
+        for (const [x, y] of ring) { sx += x; sy += y; n++; }
+        return [sx / n, sy / n];
+      };
+      const out = new Map();
+      for (const feat of geo.features) {
+        const g = feat.geometry;
+        let c = null;
+        if (g.type === 'Polygon') c = polyCentroid(g.coordinates[0]);
+        else if (g.type === 'MultiPolygon') {
+          let best = null, bestLen = -1;
+          for (const poly of g.coordinates) {
+            if (poly[0].length > bestLen) { bestLen = poly[0].length; best = poly; }
+          }
+          if (best) c = polyCentroid(best[0]);
+        }
+        if (c) out.set(feat.properties.dp, c);
+      }
+      this._precinctCentroids = out;
+      return out;
+    },
+
     async renderMap() {
       const el = document.getElementById('mapChart');
       if (!el) return;
-      const rows = this._filteredCache;
-      if (!rows || !rows.length) { Plotly.purge(el); return; }
-
       const geo = await this._loadGeojson();
       if (!geo) return;
 
-      // Aggregate by base precinct: top candidate + their vote share
-      const byPrecinct = new Map();
-      for (const r of rows) {
-        const p = r.precinct;
-        if (!byPrecinct.has(p)) byPrecinct.set(p, { cands: new Map(), total: 0 });
-        const e = byPrecinct.get(p);
-        e.cands.set(r.candidate, (e.cands.get(r.candidate) || 0) + r.votes);
-        e.total += r.votes;
-      }
+      const rows = this._filteredCache || [];
+      const selected = new Set(rows.map(r => r.precinct));
+      const centroids = this._computeCentroids(geo);
 
-      const allDp = geo.features.map(f => f.properties.dp);
-      const selLocs = [], selZ = [], selText = [];
-      const otherLocs = [], otherText = [];
-      for (const dp of allDp) {
-        const entry = byPrecinct.get(dp);
-        if (entry && entry.total > 0) {
-          const sorted = [...entry.cands.entries()].sort((a, b) => b[1] - a[1]);
-          const [topName, topVotes] = sorted[0];
-          const pct = topVotes / entry.total * 100;
-          selLocs.push(dp);
-          selZ.push(pct);
-          selText.push(`<b>${dp}</b><br>Top: ${topName}<br>${pct.toFixed(1)}% (${topVotes.toLocaleString()} of ${entry.total.toLocaleString()})`);
+      // Label trace: dp shown at centroid of every precinct
+      const allLng = [], allLat = [], allTxt = [];
+      const selLng = [], selLat = [], selTxt = [];
+      for (const [dp, [lng, lat]] of centroids) {
+        if (selected.has(dp)) {
+          selLng.push(lng); selLat.push(lat); selTxt.push(dp);
         } else {
-          otherLocs.push(dp);
-          otherText.push(`<b>${dp}</b><br><i>not in current selection</i>`);
+          allLng.push(lng); allLat.push(lat); allTxt.push(dp);
         }
       }
 
-      const traces = [];
-      if (this.mapShowOthers && otherLocs.length) {
-        traces.push({
-          type: 'choroplethmapbox',
-          geojson: geo,
-          featureidkey: 'properties.dp',
-          locations: otherLocs,
-          z: otherLocs.map(() => 0),
-          text: otherText,
-          hovertemplate: '%{text}<extra></extra>',
-          colorscale: [[0, '#1f1f1f'], [1, '#1f1f1f']],
-          showscale: false,
-          marker: { line: { width: 0.3, color: '#333' }, opacity: 0.35 },
-        });
-      }
-      if (selLocs.length) {
-        traces.push({
-          type: 'choroplethmapbox',
-          geojson: geo,
-          featureidkey: 'properties.dp',
-          locations: selLocs,
-          z: selZ,
-          text: selText,
-          hovertemplate: '%{text}<extra></extra>',
-          colorscale: 'Viridis',
-          zmin: 0, zmax: 100,
-          showscale: true,
-          marker: { line: { width: 0.6, color: '#262626' }, opacity: 0.88 },
-          colorbar: {
-            title: { text: 'Top cand %', font: { color: '#d1d5db', size: 11 } },
-            tickfont: { color: '#9ca3af', size: 10 },
-            thickness: 12, len: 0.6, x: 1.0, xpad: 4,
-            bgcolor: 'rgba(0,0,0,0)',
-          },
+      const traces = [
+        {
+          type: 'scattermapbox',
+          mode: 'text',
+          lon: allLng, lat: allLat, text: allTxt,
+          textfont: { color: '#ffffff', size: 10, family: 'sans-serif' },
+          hoverinfo: 'skip',
+          name: 'precincts',
+        },
+        {
+          type: 'scattermapbox',
+          mode: 'text',
+          lon: selLng, lat: selLat, text: selTxt,
+          textfont: { color: '#fbbf24', size: 12, family: 'sans-serif' },
+          hoverinfo: 'skip',
+          name: 'selected',
+        },
+      ];
+
+      const layers = [
+        {
+          sourcetype: 'raster',
+          source: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+          type: 'raster',
+          below: 'traces',
+        },
+        {
+          sourcetype: 'geojson',
+          source: 'https://map.mohoaina.com/Precincts.geojson',
+          type: 'line',
+          color: '#3b82f6',
+          line: { width: 1 },
+        },
+      ];
+      if (selected.size) {
+        // Highlight selected precincts with a brighter, thicker outline
+        const selFeatures = {
+          type: 'FeatureCollection',
+          features: geo.features.filter(f => selected.has(f.properties.dp)),
+        };
+        layers.push({
+          sourcetype: 'geojson',
+          source: selFeatures,
+          type: 'line',
+          color: '#fbbf24',
+          line: { width: 2.5 },
         });
       }
 
       Plotly.react(el, traces, {
         ...PLOTLY_THEME,
         mapbox: {
-          style: 'carto-darkmatter',
+          style: 'white-bg',
+          layers,
           center: { lat: 20.7, lon: -157.5 },
           zoom: 6.2,
         },
-        height: 540,
+        height: 600,
         margin: { t: 10, r: 10, b: 10, l: 10 },
-      }, PLOTLY_CONFIG);
+        showlegend: false,
+      }, { ...PLOTLY_CONFIG, scrollZoom: true });
     },
 
     get chart1Title() {
