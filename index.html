@@ -342,6 +342,21 @@ table.results td { color: var(--text-secondary); }
       </div>
     </div>
 
+    <!-- Row 3: Precinct Map (full width) -->
+    <div class="chart-card" style="margin-bottom: 20px;">
+      <div class="chart-head">
+        <h3 class="chart-title">Precinct Map</h3>
+        <div style="display: flex; gap: 14px; align-items: center;">
+          <label class="toggle-row" style="font-size: 11px;">
+            <input type="checkbox" x-model="mapShowOthers" @change="renderMap()">
+            Show unselected precincts
+          </label>
+          <span x-show="mapStatus" x-text="mapStatus" style="font-size: 11px; color: var(--text-dim);"></span>
+        </div>
+      </div>
+      <div class="chart-body" id="mapChart" style="min-height: 540px;"></div>
+    </div>
+
     <!-- Demographics -->
     <div id="demographics"></div>
   </div>

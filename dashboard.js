@@ -60,6 +60,10 @@ function dashboard() {
     stats: { totalVotes: 0, precinctCount: 0, candidateCount: 0 },
     statusMessage: '',
     resultsTableHtml: '',
+    mapShowOthers: true,
+    mapStatus: '',
+    _geojson: null,
+    _geojsonPromise: null,
 
     init() {
       const data = window.__DATA;
@@ -80,8 +84,33 @@ function dashboard() {
       this.ranking.year = data.years[data.years.length - 1];
       this.ranking.type = data.types.includes('Primary') ? 'Primary' : data.types[0];
 
+      // Kick off GeoJSON fetch in parallel with first render
+      this._loadGeojson();
+
       // Wait for Alpine to mount, then render
       this.$nextTick(() => this.refresh());
+    },
+
+    _loadGeojson() {
+      if (this._geojson) return Promise.resolve(this._geojson);
+      if (this._geojsonPromise) return this._geojsonPromise;
+      this.mapStatus = 'Loading map…';
+      this._geojsonPromise = fetch('https://map.mohoaina.com/Precincts.geojson')
+        .then(r => {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(gj => {
+          this._geojson = gj;
+          this.mapStatus = '';
+          return gj;
+        })
+        .catch(err => {
+          this.mapStatus = 'Map failed to load: ' + err.message;
+          this._geojsonPromise = null;
+          return null;
+        });
+      return this._geojsonPromise;
     },
 
     toggle(key, value) {
@@ -246,8 +275,95 @@ function dashboard() {
         this.renderChart2();
         this.renderChart3();
         this.buildResultsTable();
+        this.renderMap();
         this.renderDemographics();
       });
+    },
+
+    async renderMap() {
+      const el = document.getElementById('mapChart');
+      if (!el) return;
+      const rows = this._filteredCache;
+      if (!rows || !rows.length) { Plotly.purge(el); return; }
+
+      const geo = await this._loadGeojson();
+      if (!geo) return;
+
+      // Aggregate by base precinct: top candidate + their vote share
+      const byPrecinct = new Map();
+      for (const r of rows) {
+        const p = r.precinct;
+        if (!byPrecinct.has(p)) byPrecinct.set(p, { cands: new Map(), total: 0 });
+        const e = byPrecinct.get(p);
+        e.cands.set(r.candidate, (e.cands.get(r.candidate) || 0) + r.votes);
+        e.total += r.votes;
+      }
+
+      const allDp = geo.features.map(f => f.properties.dp);
+      const selLocs = [], selZ = [], selText = [];
+      const otherLocs = [], otherText = [];
+      for (const dp of allDp) {
+        const entry = byPrecinct.get(dp);
+        if (entry && entry.total > 0) {
+          const sorted = [...entry.cands.entries()].sort((a, b) => b[1] - a[1]);
+          const [topName, topVotes] = sorted[0];
+          const pct = topVotes / entry.total * 100;
+          selLocs.push(dp);
+          selZ.push(pct);
+          selText.push(`<b>${dp}</b><br>Top: ${topName}<br>${pct.toFixed(1)}% (${topVotes.toLocaleString()} of ${entry.total.toLocaleString()})`);
+        } else {
+          otherLocs.push(dp);
+          otherText.push(`<b>${dp}</b><br><i>not in current selection</i>`);
+        }
+      }
+
+      const traces = [];
+      if (this.mapShowOthers && otherLocs.length) {
+        traces.push({
+          type: 'choroplethmapbox',
+          geojson: geo,
+          featureidkey: 'properties.dp',
+          locations: otherLocs,
+          z: otherLocs.map(() => 0),
+          text: otherText,
+          hovertemplate: '%{text}<extra></extra>',
+          colorscale: [[0, '#1f1f1f'], [1, '#1f1f1f']],
+          showscale: false,
+          marker: { line: { width: 0.3, color: '#333' }, opacity: 0.35 },
+        });
+      }
+      if (selLocs.length) {
+        traces.push({
+          type: 'choroplethmapbox',
+          geojson: geo,
+          featureidkey: 'properties.dp',
+          locations: selLocs,
+          z: selZ,
+          text: selText,
+          hovertemplate: '%{text}<extra></extra>',
+          colorscale: 'Viridis',
+          zmin: 0, zmax: 100,
+          showscale: true,
+          marker: { line: { width: 0.6, color: '#262626' }, opacity: 0.88 },
+          colorbar: {
+            title: { text: 'Top cand %', font: { color: '#d1d5db', size: 11 } },
+            tickfont: { color: '#9ca3af', size: 10 },
+            thickness: 12, len: 0.6, x: 1.0, xpad: 4,
+            bgcolor: 'rgba(0,0,0,0)',
+          },
+        });
+      }
+
+      Plotly.react(el, traces, {
+        ...PLOTLY_THEME,
+        mapbox: {
+          style: 'carto-darkmatter',
+          center: { lat: 20.7, lon: -157.5 },
+          zoom: 6.2,
+        },
+        height: 540,
+        margin: { t: 10, r: 10, b: 10, l: 10 },
+      }, PLOTLY_CONFIG);
     },
 
     get chart1Title() {
