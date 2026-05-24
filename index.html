@@ -346,7 +346,13 @@ table.results td { color: var(--text-secondary); }
     <div class="chart-card" style="margin-bottom: 20px;">
       <div class="chart-head">
         <h3 class="chart-title">Precinct Map</h3>
-        <span x-show="mapStatus" x-text="mapStatus" style="font-size: 11px; color: var(--text-dim);"></span>
+        <div style="display: flex; gap: 14px; align-items: center;">
+          <label class="toggle-row" style="font-size: 11px;">
+            <input type="checkbox" x-model="mapHideUnselected" @change="renderMap()">
+            Hide unselected precincts
+          </label>
+          <span x-show="mapStatus" x-text="mapStatus" style="font-size: 11px; color: var(--text-dim);"></span>
+        </div>
       </div>
       <div class="chart-body" id="mapChart" style="min-height: 600px;"></div>
     </div>

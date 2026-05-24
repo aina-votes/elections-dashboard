@@ -61,9 +61,12 @@ function dashboard() {
     statusMessage: '',
     resultsTableHtml: '',
     mapStatus: '',
+    mapHideUnselected: false,
     _geojson: null,
     _geojsonPromise: null,
     _precinctCentroids: null,
+    _mapZoomListenerAttached: false,
+    _mapZoom: 6.2,
 
     init() {
       const data = window.__DATA;
@@ -305,6 +308,12 @@ function dashboard() {
       return out;
     },
 
+    _labelSizesForZoom(z) {
+      const all = Math.max(10, Math.round((z - 4) * 3.2));
+      const sel = Math.max(13, Math.round((z - 4) * 4.0));
+      return { all, sel };
+    },
+
     async renderMap() {
       const el = document.getElementById('mapChart');
       if (!el) return;
@@ -313,35 +322,30 @@ function dashboard() {
 
       const rows = this._filteredCache || [];
       const selected = new Set(rows.map(r => r.precinct));
+      const hideUnsel = this.mapHideUnselected && selected.size > 0;
       const centroids = this._computeCentroids(geo);
 
-      // Label trace: dp shown at centroid of every precinct
+      // Split centroids: selected (always shown) vs others (shown unless hidden)
       const allLng = [], allLat = [], allTxt = [];
       const selLng = [], selLat = [], selTxt = [];
       for (const [dp, [lng, lat]] of centroids) {
-        if (selected.has(dp)) {
-          selLng.push(lng); selLat.push(lat); selTxt.push(dp);
-        } else {
-          allLng.push(lng); allLat.push(lat); allTxt.push(dp);
-        }
+        if (selected.has(dp)) { selLng.push(lng); selLat.push(lat); selTxt.push(dp); }
+        else if (!hideUnsel)  { allLng.push(lng); allLat.push(lat); allTxt.push(dp); }
       }
 
+      const sizes = this._labelSizesForZoom(this._mapZoom);
       const traces = [
         {
-          type: 'scattermapbox',
-          mode: 'text',
+          type: 'scattermapbox', mode: 'text',
           lon: allLng, lat: allLat, text: allTxt,
-          textfont: { color: '#ffffff', size: 10, family: 'sans-serif' },
+          textfont: { color: '#ffffff', size: sizes.all, family: 'sans-serif' },
           hoverinfo: 'skip',
-          name: 'precincts',
         },
         {
-          type: 'scattermapbox',
-          mode: 'text',
+          type: 'scattermapbox', mode: 'text',
           lon: selLng, lat: selLat, text: selTxt,
-          textfont: { color: '#fbbf24', size: 12, family: 'sans-serif' },
+          textfont: { color: '#fbbf24', size: sizes.sel, family: 'sans-serif' },
           hoverinfo: 'skip',
-          name: 'selected',
         },
       ];
 
@@ -352,27 +356,30 @@ function dashboard() {
           type: 'raster',
           below: 'traces',
         },
-        {
-          sourcetype: 'geojson',
-          source: 'https://map.mohoaina.com/Precincts.geojson',
-          type: 'line',
-          color: '#3b82f6',
-          line: { width: 1 },
-        },
       ];
-      if (selected.size) {
-        // Highlight selected precincts with a brighter, thicker outline
-        const selFeatures = {
-          type: 'FeatureCollection',
-          features: geo.features.filter(f => selected.has(f.properties.dp)),
-        };
+      const selFeatures = {
+        type: 'FeatureCollection',
+        features: geo.features.filter(f => selected.has(f.properties.dp)),
+      };
+      if (hideUnsel) {
+        // Only outline selected precincts
+        layers.push({
+          sourcetype: 'geojson', source: selFeatures,
+          type: 'line', color: '#fbbf24', line: { width: 2.5 },
+        });
+      } else {
+        // Outline everything; selected gets a brighter, thicker line on top
         layers.push({
           sourcetype: 'geojson',
-          source: selFeatures,
-          type: 'line',
-          color: '#fbbf24',
-          line: { width: 2.5 },
+          source: 'https://map.mohoaina.com/Precincts.geojson',
+          type: 'line', color: '#3b82f6', line: { width: 1 },
         });
+        if (selected.size) {
+          layers.push({
+            sourcetype: 'geojson', source: selFeatures,
+            type: 'line', color: '#fbbf24', line: { width: 2.5 },
+          });
+        }
       }
 
       Plotly.react(el, traces, {
@@ -381,12 +388,24 @@ function dashboard() {
           style: 'white-bg',
           layers,
           center: { lat: 20.7, lon: -157.5 },
-          zoom: 6.2,
+          zoom: this._mapZoom,
         },
         height: 600,
         margin: { t: 10, r: 10, b: 10, l: 10 },
         showlegend: false,
       }, { ...PLOTLY_CONFIG, scrollZoom: true });
+
+      if (!this._mapZoomListenerAttached) {
+        el.on('plotly_relayout', (evt) => {
+          if ('mapbox.zoom' in evt) {
+            this._mapZoom = evt['mapbox.zoom'];
+            const s = this._labelSizesForZoom(this._mapZoom);
+            Plotly.restyle(el, { 'textfont.size': s.all }, [0]);
+            Plotly.restyle(el, { 'textfont.size': s.sel }, [1]);
+          }
+        });
+        this._mapZoomListenerAttached = true;
+      }
     },
 
     get chart1Title() {
