@@ -65,8 +65,9 @@ function dashboard() {
     _geojson: null,
     _geojsonPromise: null,
     _precinctCentroids: null,
-    _mapZoomListenerAttached: false,
     _mapZoom: 6.2,
+    _labelReposition: null,
+    _labelHandlersBound: false,
 
     init() {
       const data = window.__DATA;
@@ -308,12 +309,6 @@ function dashboard() {
       return out;
     },
 
-    _labelSizesForZoom(z) {
-      const all = Math.max(10, Math.round((z - 4) * 3.2));
-      const sel = Math.max(13, Math.round((z - 4) * 4.0));
-      return { all, sel };
-    },
-
     async renderMap() {
       const el = document.getElementById('mapChart');
       if (!el) return;
@@ -333,21 +328,14 @@ function dashboard() {
         else if (!hideUnsel)  { allLng.push(lng); allLat.push(lat); allTxt.push(dp); }
       }
 
-      const sizes = this._labelSizesForZoom(this._mapZoom);
-      const traces = [
-        {
-          type: 'scattermapbox', mode: 'text',
-          lon: allLng, lat: allLat, text: allTxt,
-          textfont: { color: '#ffffff', size: sizes.all, family: 'sans-serif' },
-          hoverinfo: 'skip',
-        },
-        {
-          type: 'scattermapbox', mode: 'text',
-          lon: selLng, lat: selLat, text: selTxt,
-          textfont: { color: '#fbbf24', size: sizes.sel, family: 'sans-serif' },
-          hoverinfo: 'skip',
-        },
-      ];
+      // Empty scatter trace — labels are rendered as HTML overlays below
+      // (scattermap text rendering is broken in this dashboard context)
+      const traces = [{
+        type: 'scattermap', mode: 'markers',
+        lon: [], lat: [],
+        marker: { size: 0 },
+        hoverinfo: 'skip',
+      }];
 
       const layers = [
         {
@@ -384,7 +372,7 @@ function dashboard() {
 
       Plotly.react(el, traces, {
         ...PLOTLY_THEME,
-        mapbox: {
+        map: {
           style: 'white-bg',
           layers,
           center: { lat: 20.7, lon: -157.5 },
@@ -395,16 +383,93 @@ function dashboard() {
         showlegend: false,
       }, { ...PLOTLY_CONFIG, scrollZoom: true });
 
-      if (!this._mapZoomListenerAttached) {
-        el.on('plotly_relayout', (evt) => {
-          if ('mapbox.zoom' in evt) {
-            this._mapZoom = evt['mapbox.zoom'];
-            const s = this._labelSizesForZoom(this._mapZoom);
-            Plotly.restyle(el, { 'textfont.size': s.all }, [0]);
-            Plotly.restyle(el, { 'textfont.size': s.sel }, [1]);
-          }
+      // HTML overlay labels — Plotly's scattermap text fails in this context,
+      // so we draw labels ourselves on top of the maplibre canvas.
+      this._renderMapLabels(centroids, selected, hideUnsel);
+    },
+
+    _renderMapLabels(centroids, selected, hideUnsel) {
+      const el = document.getElementById('mapChart');
+      if (!el) return;
+      const subplot = el._fullLayout?.map?._subplot;
+      const mlMap = subplot?.map;
+      if (!mlMap) {
+        // Plotly hasn't finished mounting the maplibre map yet — try again
+        setTimeout(() => this._renderMapLabels(centroids, selected, hideUnsel), 200);
+        return;
+      }
+
+      // Ensure overlay container exists, positioned over the map
+      let overlay = el.querySelector('.precinct-label-overlay');
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'precinct-label-overlay';
+        Object.assign(overlay.style, {
+          position: 'absolute', inset: '0', pointerEvents: 'none',
+          overflow: 'hidden', zIndex: '5',
         });
-        this._mapZoomListenerAttached = true;
+        // mapChart is .chart-body inside .chart-card; make sure it can hold absolutely-positioned children
+        const cs = window.getComputedStyle(el);
+        if (cs.position === 'static') el.style.position = 'relative';
+        el.appendChild(overlay);
+      }
+
+      const visible = [];
+      for (const [dp, [lng, lat]] of centroids) {
+        const isSel = selected.has(dp);
+        if (hideUnsel && !isSel) continue;
+        visible.push({ dp, lng, lat, isSel });
+      }
+
+      // Diff against existing children
+      const byDp = new Map();
+      overlay.querySelectorAll('span[data-dp]').forEach(n => byDp.set(n.dataset.dp, n));
+      const keep = new Set();
+      for (const v of visible) {
+        keep.add(v.dp);
+        let span = byDp.get(v.dp);
+        if (!span) {
+          span = document.createElement('span');
+          span.dataset.dp = v.dp;
+          span.textContent = v.dp;
+          Object.assign(span.style, {
+            position: 'absolute',
+            transform: 'translate(-50%, -50%)',
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            fontWeight: '700',
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+            textShadow: '0 0 4px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.7)',
+          });
+          overlay.appendChild(span);
+        }
+        span.style.color = v.isSel ? '#fbbf24' : '#ffffff';
+      }
+      // Remove no-longer-visible labels
+      for (const [dp, node] of byDp) if (!keep.has(dp)) node.remove();
+
+      // Latest reposition fn is stored on `this`; the bound map handler reads it.
+      // Smooth size curve: z=6 (state) ~11px, z=10 (county) ~22px, z=13 (city) ~36px, z=16 (street) ~52px.
+      this._labelReposition = () => {
+        const z = mlMap.getZoom();
+        const size = Math.max(11, Math.round(11 + Math.pow(Math.max(0, z - 6), 1.3) * 2.2));
+        for (const v of visible) {
+          const node = overlay.querySelector(`span[data-dp="${CSS.escape(v.dp)}"]`);
+          if (!node) continue;
+          const p = mlMap.project([v.lng, v.lat]);
+          node.style.left = p.x + 'px';
+          node.style.top = p.y + 'px';
+          node.style.fontSize = (v.isSel ? Math.round(size * 1.25) : size) + 'px';
+        }
+      };
+      this._labelReposition();
+
+      if (!this._labelHandlersBound) {
+        const fire = () => this._labelReposition && this._labelReposition();
+        mlMap.on('move', fire);
+        mlMap.on('zoom', fire);
+        mlMap.on('resize', fire);
+        this._labelHandlersBound = true;
       }
     },
 
