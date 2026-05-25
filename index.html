@@ -170,8 +170,15 @@ table.results td { color: var(--text-secondary); }
 
 /* Demographics */
 .demo-section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
-.demo-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.demo-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
 .demo-title { font-size: 15px; font-weight: 700; color: var(--text-primary); margin: 0; }
+.demo-controls {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 30px 0 6px; gap: 16px; flex-wrap: wrap;
+}
+.demo-header-title { font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0; }
+.demo-toggle { display: flex; gap: 6px; }
+.demo-source-note { font-size: 11px; color: var(--text-dim); margin-bottom: 16px; }
 
 /* Plotly hover override */
 .plotly .modebar { background: transparent !important; }

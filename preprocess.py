@@ -22,6 +22,7 @@ HERE = Path(__file__).parent
 ELECTION_XLSX = HERE / "Hawaii_Elections_Combined_l (1).xlsx"
 MAPPING_XLSX = HERE / "Precint_Mapping.xlsx"
 DEMOGRAPHICS_XLSX = HERE / "cleaned_precincts.xlsx"
+ACS_DISTRICT_XLSX = HERE / "acs_district_demographics.xlsx"
 OUT_JS = HERE / "data.js"
 
 KEEP_YEARS = {2022, 2024}
@@ -362,6 +363,106 @@ def load_demographics() -> dict:
     return out
 
 
+_ACS_SHEET_RE = re.compile(
+    r"^State (Representative|Senator),\s*Dist\s+(\d+)$", re.IGNORECASE
+)
+
+# Canonical income bucket labels (source labels vary slightly across sheets).
+_INCOME_NORMALIZE = [
+    (re.compile(r"0\s*to\s*\$?50[,.]?000", re.I), "$0 - $50K"),
+    (re.compile(r"50[,.]?000.*to.*100[,.]?000", re.I), "$50K - $100K"),
+    (re.compile(r"100[,.]?000.*to.*150[,.]?000", re.I), "$100K - $150K"),
+    (re.compile(r"150[,.]?000.*to.*200[,.]?000", re.I), "$150K - $200K"),
+    (re.compile(r"200[,.]?000\s*\+", re.I), "$200K+"),
+]
+_INCOME_ORDER = ["$0 - $50K", "$50K - $100K", "$100K - $150K", "$150K - $200K", "$200K+"]
+
+
+def _normalize_income_label(raw: str) -> str | None:
+    for pat, canon in _INCOME_NORMALIZE:
+        if pat.search(raw):
+            return canon
+    return None
+
+
+def _parse_section(ws, header_label: str) -> list[tuple[str, float, int]]:
+    """Find a section header (e.g. 'Age', 'Ethnicity', 'Income') anywhere in the
+    sheet and walk the rows below it, reading (label, value) from the header's
+    column and the next column. Returns a list of (clean_label, value, indent)
+    triples preserving the source-sheet order. Indent = whitespace level
+    (0 = top race, 1 = sub-race) derived from leading NBSP/space count."""
+    header_row = header_col = None
+    for r in range(1, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            v = ws.cell(r, c).value
+            if isinstance(v, str) and v.strip().lower() == header_label.lower():
+                header_row, header_col = r, c
+                break
+        if header_row is not None:
+            break
+    if header_row is None:
+        return []
+
+    rows: list[tuple[str, float, int]] = []
+    for r in range(header_row + 1, ws.max_row + 1):
+        label = ws.cell(r, header_col).value
+        value = ws.cell(r, header_col + 1).value
+        if label is None and value is None:
+            break
+        if not isinstance(label, str) or value is None:
+            continue
+        # Indent = number of leading whitespace chars / 4 (NBSP and regular both count)
+        lead = len(label) - len(label.lstrip(" \xa0"))
+        indent = 1 if lead >= 14 else 0  # 12 sp = top-level, 16 sp = sub
+        clean = label.strip(" \xa0")
+        rows.append((clean, float(value), indent))
+    return rows
+
+
+def load_acs_district() -> dict[str, dict]:
+    """Read per-district ACS demographics from `acs_district_demographics.xlsx`.
+
+    Returns {district_label: {age: [[label, value, indent], ...],
+                              ethnicity: [...],
+                              income: [...]}}
+    where district_label is "HD-N" / "SD-N".
+    """
+    if not ACS_DISTRICT_XLSX.exists():
+        print(f"  (no {ACS_DISTRICT_XLSX.name} — skipping ACS district data)")
+        return {}
+    import openpyxl  # local import; only needed here
+    wb = openpyxl.load_workbook(ACS_DISTRICT_XLSX, data_only=True)
+    out: dict[str, dict] = {}
+    for sheet_name in wb.sheetnames:
+        m = _ACS_SHEET_RE.match(sheet_name.strip())
+        if not m:
+            continue
+        kind, num = m.group(1).lower(), m.group(2)
+        prefix = "HD" if kind == "representative" else "SD"
+        label = f"{prefix}-{int(num)}"
+
+        ws = wb[sheet_name]
+        age_rows = _parse_section(ws, "Age")
+        eth_rows = _parse_section(ws, "Ethnicity")
+        inc_rows_raw = _parse_section(ws, "Income")
+
+        # Normalize income labels to canonical set + order
+        income_map = {}
+        for raw_label, val, _ in inc_rows_raw:
+            canon = _normalize_income_label(raw_label)
+            if canon:
+                income_map[canon] = val
+        inc_rows = [(c, income_map[c], 0) for c in _INCOME_ORDER if c in income_map]
+
+        # Normalize age labels: strip stray whitespace ('  85+' on some sheets)
+        age_rows = [(lbl.strip(), v, 0) for (lbl, v, _) in age_rows]
+
+        if not (age_rows or eth_rows or inc_rows):
+            continue
+        out[label] = {"age": age_rows, "ethnicity": eth_rows, "income": inc_rows}
+    return out
+
+
 def main():
     print("Loading mapping...")
     mapping = load_mapping()
@@ -378,6 +479,10 @@ def main():
     print("Loading demographics...")
     demographics = load_demographics()
     print(f"  {len(demographics)} precincts with demographic data")
+
+    print("Loading ACS district demographics...")
+    acs_district = load_acs_district()
+    print(f"  {len(acs_district)} districts with ACS data")
 
     # build district lists from actual data
     def collect(field):
@@ -463,6 +568,7 @@ def main():
             "parties": t_party,
         },
         "demographics": demo_by_pi,
+        "acs_district": acs_district,
         "mapping": mapping_by_pi,
         "districts": {
             "hd": collect("hd"),

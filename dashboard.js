@@ -62,6 +62,7 @@ function dashboard() {
     resultsTableHtml: '',
     mapStatus: '',
     mapHideUnselected: false,
+    demoMode: 'precinct',  // 'precinct' = 2020 Decennial per-precinct; 'district' = 2023 ACS per HD/SD
     _geojson: null,
     _geojsonPromise: null,
     _precinctCentroids: null,
@@ -706,8 +707,136 @@ function dashboard() {
     renderDemographics() {
       const container = document.getElementById('demographics');
       if (!container) return;
+
+      const isDistrict = this.demoMode === 'district';
+      const sourceNote = isDistrict
+        ? '2023 American Community Survey, scoped to State House or State Senate district'
+        : '2020 Decennial Census, scoped to precincts of the selected races';
+
+      const header = `
+        <div class="demo-controls">
+          <h2 class="demo-header-title">Demographics</h2>
+          <div class="demo-toggle">
+            <div class="chip ${isDistrict ? '' : 'active'}" data-demo-mode="precinct">Precinct-level</div>
+            <div class="chip ${isDistrict ? 'active' : ''}" data-demo-mode="district">District-wide</div>
+          </div>
+        </div>
+        <div class="demo-source-note">Source: ${sourceNote}.</div>
+      `;
+      container.innerHTML = header + '<div id="demographics-body"></div>';
+
+      // Hook up the toggle pills
+      container.querySelectorAll('[data-demo-mode]').forEach(el => {
+        el.addEventListener('click', () => {
+          this.demoMode = el.dataset.demoMode;
+          this.renderDemographics();
+        });
+      });
+
+      const body = container.querySelector('#demographics-body');
+      if (isDistrict) this._renderDistrictDemographics(body);
+      else this._renderPrecinctDemographics(body);
+    },
+
+    _renderDistrictDemographics(body) {
       const data = this._data;
-      if (!data.demographics) { container.innerHTML = ''; return; }
+      const acs = data.acs_district || {};
+
+      const selected = this.filters.districts || [];
+      const hdSd = selected.filter(d => d.startsWith('HD-') || d.startsWith('SD-'));
+
+      if (selected.length === 0) {
+        body.innerHTML = '<div class="status-bar" style="border-left-color: var(--amber); color: var(--text-muted);">Select a State House (HD) or State Senate (SD) district in the sidebar to view district-wide demographics.</div>';
+        return;
+      }
+      if (hdSd.length === 0) {
+        body.innerHTML = '<div class="status-bar" style="border-left-color: var(--text-dim);">District-wide data coming soon for Congressional and County Council districts.</div>';
+        return;
+      }
+
+      const present = hdSd.filter(d => acs[d]);
+      const missing = hdSd.filter(d => !acs[d]);
+
+      const renderSection = (key, title, fmtPct, helpNote) => {
+        const sid = 'demo-district-' + key;
+        return `
+          <div class="demo-section">
+            <div class="demo-head">
+              <h3 class="demo-title">${title}</h3>
+              ${helpNote ? `<span style="font-size: 11px; color: var(--text-dim);">${helpNote}</span>` : ''}
+            </div>
+            <div id="${sid}" style="min-height: 380px;"></div>
+          </div>
+        `;
+      };
+
+      let html = '';
+      if (missing.length) {
+        html += `<div class="status-bar" style="border-left-color: var(--text-dim); margin-bottom: 12px;">No ACS data for: ${missing.join(', ')}.</div>`;
+      }
+      if (!present.length) { body.innerHTML = html; return; }
+
+      html += renderSection('age', 'Age', false);
+      html += renderSection('ethnicity', 'Ethnicity', false, 'Indented labels are sub-races within Asian / Pacific Islander');
+      html += renderSection('income', 'Income', true, 'Percent of households');
+      body.innerHTML = html;
+
+      this._renderDistrictBars('demo-district-age', present, acs, 'age', { asPct: false });
+      this._renderDistrictBars('demo-district-ethnicity', present, acs, 'ethnicity', { asPct: false, indented: true });
+      this._renderDistrictBars('demo-district-income', present, acs, 'income', { asPct: true });
+    },
+
+    _renderDistrictBars(elId, districts, acs, key, opts) {
+      // Build union of labels preserving the order from the first district that has data
+      const order = [];
+      const seen = new Set();
+      const indentByLabel = new Map();
+      for (const d of districts) {
+        const rows = acs[d]?.[key] || [];
+        for (const [label, , indent] of rows) {
+          if (!seen.has(label)) {
+            seen.add(label);
+            order.push(label);
+            indentByLabel.set(label, indent);
+          }
+        }
+      }
+
+      // Display labels: prefix sub-race rows with a non-breaking-space indent
+      const displayLabels = order.map(l => (opts.indented && indentByLabel.get(l) ? '    ' + l : l));
+
+      const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#6366f1', '#14b8a6', '#ef4444'];
+      const traces = districts.map((d, i) => {
+        const map = new Map((acs[d][key] || []).map(([lbl, val]) => [lbl, val]));
+        const yVals = order.map(l => {
+          const v = map.get(l) || 0;
+          return opts.asPct ? v * 100 : v;
+        });
+        return {
+          type: 'bar', name: d,
+          x: displayLabels, y: yVals,
+          marker: { color: COLORS[i % COLORS.length] },
+          hovertemplate: opts.asPct
+            ? '%{x}<br>%{y:.1f}%<extra>' + d + '</extra>'
+            : '%{x}<br>%{y:,}<extra>' + d + '</extra>',
+        };
+      });
+
+      Plotly.react(elId, traces, {
+        ...PLOTLY_THEME,
+        barmode: 'group',
+        xaxis: { ...PLOTLY_THEME.xaxis, tickangle: -35, automargin: true, type: 'category' },
+        yaxis: { ...PLOTLY_THEME.yaxis, title: opts.asPct ? '% of households' : 'Count', automargin: true, tickformat: opts.asPct ? '.0f' : ',' },
+        height: 380,
+        margin: { t: 10, r: 20, b: 140, l: 70 },
+        showlegend: districts.length > 1,
+        legend: { orientation: 'v', x: 1.02, y: 1, font: { color: '#d1d5db' }, bgcolor: 'rgba(0,0,0,0)' },
+      }, PLOTLY_CONFIG);
+    },
+
+    _renderPrecinctDemographics(body) {
+      const data = this._data;
+      if (!data.demographics) { body.innerHTML = ''; return; }
       const precincts = [...new Set(this._filteredCache.map(r => r.precinct))].sort();
       const demoByPrec = precincts
         .map(p => {
@@ -718,13 +847,13 @@ function dashboard() {
         .filter(x => x.rec);
 
       if (!demoByPrec.length) {
-        container.innerHTML = '<div class="status-bar" style="border-left-color: var(--text-dim);">No demographic data available for selected precincts.</div>';
+        body.innerHTML = '<div class="status-bar" style="border-left-color: var(--text-dim);">No demographic data available for selected precincts.</div>';
         return;
       }
 
       // Build a section per category present in the first record
       const sample = demoByPrec[0].rec;
-      let html = '<h2 style="color: var(--text-primary); font-size: 18px; margin: 30px 0 14px;">Demographics</h2>';
+      let html = '';
       const sectionIds = [];
 
       // Standard categories
@@ -778,11 +907,11 @@ function dashboard() {
         `;
       }
 
-      container.innerHTML = html;
+      body.innerHTML = html;
 
       // Hook up per-section toggles + initial render
       for (const sec of sectionIds) {
-        const cb = container.querySelector(`input[data-demo-pct="${sec.id}"]`);
+        const cb = body.querySelector(`input[data-demo-pct="${sec.id}"]`);
         const render = () => {
           if (sec.kind === 'bars') this._renderDemoBars(sec.id, sec.cat, demoByPrec, cb.checked);
           else this._renderDemoPyramid(sec.id, sec.source, sec.title, demoByPrec, cb.checked);
